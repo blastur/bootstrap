@@ -1,0 +1,119 @@
+#!/bin/bash -eu
+
+ask_yesno() {
+    local question="${1}"
+    while true; do
+        read -rp "${question} (y/n) " yesno
+        case "${yesno}" in
+            [Yy])
+                return 0
+                ;;
+            [Nn])
+                return 1
+                ;;
+            *)
+                echo "Answer y or n"
+                ;;
+        esac
+    done
+}
+
+main() {
+    local crypt_uuid
+    local rootdev
+    local ucode
+
+    cat << EOT >> /etc/locale.gen
+en_US.UTF-8 UTF-8
+en_US ISO-8859-1
+sv_SE.UTF-8 UTF-8
+sv_SE ISO-8859-1
+EOT
+    locale-gen
+
+    ln -sf /usr/share/zoneinfo/Europe/Stockholm /etc/localtime
+    echo 'LANG=en_US.UTF-8' > /etc/locale.conf
+    echo 'KEYMAP=sv-latin1' > /etc/vconsole.conf
+
+    if ask_yesno "Install systemd-boot?"; then
+        echo "Installing systemd-boot"
+        bootctl --esp-path=/efi --boot-path=/boot install
+    fi
+
+    # Add "lvm2" and "encrypt" HOOKS to mkinitcpio.conf
+    sed -i '/^HOOKS=/s/filesystems/encrypt lvm2 &/g' /etc/mkinitcpio.conf
+    echo -n "Updated HOOKS:"
+    grep "HOOKS=" /etc/mkinitcpio.conf
+    mkinitcpio -P
+
+    if ask_yesno "Install microcode updates?";  then
+        echo "Select microcode update to install in initramfs"
+        select ucode in amd-ucode intel-ucode; do
+            pacman -Sy --noconfirm ${ucode}
+            break
+        done
+        ucode="initrd /${ucode}.img"
+    else
+        ucode=""
+    fi
+
+    # Find parent device of crypt device /dev/mapper/cryptlvm
+    cryptdev="/dev/$(dmsetup deps -o blkdevname /dev/mapper/cryptlvm | cut -d$'\t' -f2 | sed -rn "s/: \((.+)\)/\1/p")"
+    if [ ! -e "${cryptdev}" ] || ! ask_yesno "Use device '${cryptdev}' as cryptdevice?"; then
+        lsblk
+        read -rp "Please specify cryptrev device: " cryptdev
+    fi
+    echo "Using cryptdev ${cryptdev}"
+
+    crypt_uuid=$(blkid "${cryptdev}" -o value -s UUID)
+    echo "cryptdev parent UUID ${crypt_uuid}"
+
+    # processor.max_cstate=5
+
+    rootdev=$(grep -F " / " /proc/mounts | cut -d" " -f1)
+    if [ ! -e "${rootdev}" ] || ! ask_yesno "Use device '${rootdev}' as root device?"; then
+        mount
+        read -rp "Linux root= device? " rootdev
+    fi
+
+    mkdir -p /boot/loader/entries
+    cat << EOT >> /boot/loader/entries/arch.conf
+title Arch Linux
+linux /vmlinuz-linux
+${ucode}
+initrd /initramfs-linux.img
+options cryptdevice=UUID=${crypt_uuid}:cryptlvm root=${rootdev}
+EOT
+
+    read -rp "Hostname? " hostname
+    echo "${hostname}" > /etc/hostname
+
+    if ask_yesno "Enable NetworkManager service?"; then
+        systemctl enable NetworkManager.service
+    fi
+
+    echo "Setting root password"
+    passwd
+
+    if ask_yesno "Add wheel (admin) user with sudo access?"; then
+        pacman -Sy --noconfirm sudo
+
+        read -rp "Enter username: " wheeluser
+        useradd -m -G wheel "${wheeluser}"
+
+        passwd "${wheeluser}"
+
+        mkdir -p /etc/sudoers.d/
+        echo "%wheel      ALL=(ALL:ALL) ALL" > /etc/sudoers.d/wheel
+    fi
+
+    if ask_yesno "Install ansible & git?"; then
+        pacman -Sy --noconfirm ansible git
+    fi
+
+    echo "Bootstrap complete, dropping to shell"
+    echo "To reboot into system 'exit', 'umount -R /mnt' and 'reboot'"
+    exec bash
+}
+
+main "$@"

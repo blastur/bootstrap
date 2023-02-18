@@ -1,0 +1,83 @@
+#!/bin/bash -eu
+# DO NOT RUN THIS SCRIPT BLINDLY, REVIEW AND EDIT TO SUITE YOUR NEEDS BEFORE
+# RUNNING. IF ANYTHING, USE IT AS A GUIDE. DATA LOSS MAY OCCUR!
+DISK=${1:-}
+
+ask_yesno() {
+    local question="${1}"
+    while true; do
+        read -rp "${question} (y/n) " yesno
+        case "${yesno}" in
+            [Yy])
+                return 0
+                ;;
+            [Nn])
+                return 1
+                ;;
+            *)
+                echo "Answer y or n"
+                ;;
+        esac
+    done
+}
+
+if [ -z "${DISK}" ]; then
+	echo "usage: $(basename "$0") <disk>"
+	exit 0
+fi
+
+get_partition_devpath() {
+	local disk="$1"
+	local partition_num="$2"
+
+	lsblk -nlpo NAME,TYPE "${disk}" | grep part | head -n"${partition_num}" | tail -n1 | cut -d" " -f1
+}
+
+have_partition_type() {
+	local ptype="$1"
+	local pnum
+
+	pnum=$(parted -m -l "${DISK}" | grep -F "${ptype}" | cut -d: -f1)
+	get_partition_devpath "${DISK}" "${pnum}"
+}
+
+# Assume we want to partition full disk
+# Comment out lines if you already have another set of partitions (dualboot Windows)
+parted --script "${DISK}" mklabel gpt
+parted --script "${DISK}" mkpart "EFI" fat32 1MiB 256MiB set 1 esp on
+parted --script "${DISK}" mkpart "boot" fat32 256MiB 1256MiB set 2 bls_boot on
+parted --script "${DISK}" mkpart "main" 1256MiB 100%
+
+# Assume partition order based on above mkpart's
+EFI_PART=$(get_partition_devpath "${DISK}" 1)
+BOOT_PART=$(get_partition_devpath "${DISK}" 2)
+MAIN_PART=$(get_partition_devpath "${DISK}" 3)
+
+# Format all partitions. Use FAT32 on /boot to allow UEFI to read it
+# If we use ext4, systemd-boot won't be able to locate boot entries (on some
+# systems)
+
+if ask_yesno "Format ${EFI_PART} as fat32 to become EFI partition?"; then
+	mkfs.fat -F32 "${EFI_PART}"
+fi
+if ask_yesno "Format ${BOOT_PART} as fat32 to become boot partition?"; then
+	mkfs.fat -F32 "${BOOT_PART}"
+fi
+if ask_yesno "Format ${MAIN_PART} as LUKS cryptdevice to become main partition?"; then
+	cryptsetup luksFormat "${MAIN_PART}"
+fi
+
+# Create LVM logical volumes ontop of LUKs partition
+cryptsetup open "${MAIN_PART}" cryptlvm
+pvcreate /dev/mapper/cryptlvm
+vgcreate vg0 /dev/mapper/cryptlvm
+lvcreate -L 32G vg0 -n swap
+lvcreate -l 100%FREE vg0 -n root
+mkfs.ext4 /dev/vg0/root
+mkswap /dev/vg0/swap
+
+# Mount disks into /mnt (prepare for chroot)
+mount /dev/vg0/root /mnt
+mount --mkdir "${EFI_PART}" /mnt/efi
+mount --mkdir "${BOOT_PART}" /mnt/boot
+swapon /dev/vg0/swap

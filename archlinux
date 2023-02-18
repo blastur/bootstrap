@@ -1,0 +1,85 @@
+#!/bin/bash -eu
+
+ask_yesno() {
+    local question="${1}"
+    while true; do
+        read -rp "${question} (y/n) " yesno
+        case "${yesno}" in
+            [Yy])
+                return 0
+                ;;
+            [Nn])
+                return 1
+                ;;
+            *)
+                echo "Answer y or n"
+                ;;
+        esac
+    done
+}
+
+do_command() {
+    local cmd=("$@")
+
+    echo "Cmd: ${cmd[*]}"
+    while true; do
+        if "${cmd[@]}"; then
+            return 0
+        else
+            if ! ask_yesno "Command failed, try again (you can fix things in a separate terminal)?"; then
+                return 1
+            fi
+        fi
+    done
+}
+
+main() {
+    loadkeys sv-latin1
+
+    echo -n "Checking Internet connection..."
+    if ! ping -c 1 ping.sunet.se > /dev/null 2> /dev/null; then
+        cat << EOT
+For wireless, use iwctl to setup network:
+$ rfkill unblock wlan
+$ iwctl station wlan0 scan
+$ iwctl station wlan0 get-networks
+$ iwctl station wlan0 connect <ssid>
+EOT
+        if ! ask_yesno "Network seem unavailable. Say y when you have set it up or want to continue anyway (say n to abort)."; then
+            echo "abort" >&2
+            exit 1
+        fi
+    fi
+    echo "OK!"
+
+    do_command curl "https://bootstrap.mag32.net/archlinux-chroot" --location --retry-connrefused --retry 5 -s -o archlinux-chroot
+    do_command curl "https://bootstrap.mag32.net/archlinux-partsetup" --location --retry-connrefused --retry 5 -s -o archlinux-partsetup
+
+    chmod +x archlinux-partsetup
+
+    do_command timedatectl set-timezone Europe/Stockholm
+    do_command timedatectl set-ntp true
+
+    chmod +x archlinux-partsetup
+    cat << EOT
+Review and run "./archlinux-partsetup" for semi-automated partition setup.
+EOT
+    if ! ask_yesno "Setup partitions (in separate tty) and mount them into /mnt. Say y when done or n to abort"; then
+        echo "abort" >&2
+        exit 1
+    fi
+
+    do_command pacstrap -K /mnt base linux linux-firmware nano networkmanager lvm2
+
+    if ! genfstab -U /mnt >> /mnt/etc/fstab; then
+        echo "error: genfstab failed" >&2
+        exit 1
+    fi
+
+    cp archlinux-chroot /mnt/archlinux-chroot
+    chmod +x /mnt/archlinux-chroot
+
+    arch-chroot /mnt /archlinux-chroot
+}
+
+main "$@"
