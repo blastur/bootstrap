@@ -27,7 +27,7 @@ Press F10 to boot. It will automatically download and run the script on boot.
 
 Alternatively, you can download and run the script manually like so:
 
-	root@archiso ~ # curl -sLo https://bootstrap.mag32.net/archlinux
+	root@archiso ~ # curl -sLo archlinux https://bootstrap.mag32.net/archlinux
 	root@archiso ~ # chmod +x archlinux
 	root@archiso ~ # ./archlinux
 
