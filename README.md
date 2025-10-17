@@ -25,16 +25,27 @@ From the GRUB menu, press "e" and edit the kernel cmdline and append
 
 Press F10 to boot. It will automatically download and run the script on boot.
 
-Alternatively, you can download and run the script manually like so:
+If archlinux installer ISO is unable to automatically bring up the network
+(e.g if you're on wireless or on a wired network without DHCP), setup network
+manually and then download the script.
+
+For wireless, use iwctl to setup network:
+
+	root@archiso ~ # rfkill unblock wlan
+	root@archiso ~ # iwctl station wlan0 scan
+	root@archiso ~ # iwctl station wlan0 get-networks
+	root@archiso ~ # iwctl station wlan0 connect <ssid>
+
+Download and run the script:
 
 	root@archiso ~ # curl -sLo archlinux https://bootstrap.mag32.net/archlinux
 	root@archiso ~ # chmod +x archlinux
 	root@archiso ~ # ./archlinux
 
-The [archlinux](archlinux) script is scripted version of the official
+The [archlinux](archlinux) script is a semi-automated version of the official
 [Archlinux installation guide](https://wiki.archlinux.org/title/installation_guide)
-but makes assumptions for lots of settings (like partitioning, locales, timezone,
-disk encryption, bootloader etc).
+but makes assumptions for some of settings (like partitioning, keyboard map,
+locales, timezone, disk encryption, bootloader etc).
 
 Reboot into the installed system to finish stage 1.
 
